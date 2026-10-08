@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+// Messages de validation en français (bot, dashboard, imports).
+z.config(z.locales.fr());
+
 /**
  * Configuration propre à chaque serveur. Stockée en JSON dans GuildSettings.config,
  * toujours validée par ce schéma (bot, dashboard, import /config).
@@ -464,4 +467,15 @@ export function coerceConfigValue(leaf: ConfigLeaf, raw: string): { ok: true; va
         return { ok: false, error: "JSON invalide" };
       }
   }
+}
+
+/**
+ * Clés dont la modification permettrait une élévation de privilèges ou le contournement de l'anti-nuke :
+ * réservées au propriétaire du serveur (bot et dashboard).
+ */
+export const OWNER_ONLY_CONFIG_PATHS = ["permissions.adminRoleIds", "antiNuke.trustedUserIds", "antiNuke.enabled"] as const;
+
+/** Retourne les clés réservées au propriétaire qui diffèrent entre deux configurations. */
+export function changedOwnerOnlyPaths(before: unknown, after: unknown): string[] {
+  return OWNER_ONLY_CONFIG_PATHS.filter((p) => JSON.stringify(getByPath(before, p)) !== JSON.stringify(getByPath(after, p)));
 }

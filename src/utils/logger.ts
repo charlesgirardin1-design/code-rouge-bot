@@ -17,7 +17,7 @@ function scrub(value: unknown, depth = 0): unknown {
   if (depth > 6) return value;
   if (typeof value === "string") return redactSecrets(value);
   if (value instanceof Error) {
-    return { type: value.name, message: redactSecrets(value.message), stack: value.stack ? redactSecrets(value.stack) : undefined };
+    return { name: value.name, message: redactSecrets(value.message), stack: value.stack ? redactSecrets(value.stack) : undefined, ...("code" in value ? { code: (value as { code: unknown }).code } : {}) };
   }
   if (Array.isArray(value)) return value.map((v) => scrub(v, depth + 1));
   if (value && typeof value === "object") {

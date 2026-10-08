@@ -1,3 +1,5 @@
+# Développement local : `docker compose up -d postgres`
+# Production (bot + dashboard + migrations) : `docker compose --profile app up -d --build`
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,6 +17,41 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  migrate:
+    profiles: ["app"]
+    build: { context: ., target: migrate }
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://coderouge:coderouge@postgres:5432/coderouge?schema=public
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  bot:
+    profiles: ["app"]
+    build: { context: ., target: runtime }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://coderouge:coderouge@postgres:5432/coderouge?schema=public
+    command: ["node", "dist/bot/index.js"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  dashboard:
+    profiles: ["app"]
+    build: { context: ., target: runtime }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://coderouge:coderouge@postgres:5432/coderouge?schema=public
+    command: ["node", "dist/dashboard/index.js"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
 
 volumes:
   pgdata:

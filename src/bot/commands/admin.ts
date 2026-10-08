@@ -2,7 +2,9 @@ import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, Channe
 import { PermissionLevel } from "../../permissions/levels.js";
 import {
   buildPatch,
+  changedOwnerOnlyPaths,
   coerceConfigValue,
+  deepMerge,
   defaultGuildConfig,
   getByPath,
   guildConfigSchema,
@@ -12,6 +14,7 @@ import {
 } from "../../config/guildConfig.js";
 import { UserError } from "../errors.js";
 import { infoEmbed } from "../ui/embeds.js";
+import { memberLevel } from "../permissions/index.js";
 import { actorOf, ok, reply } from "./helpers.js";
 import { requireBotPermissions } from "../permissions/index.js";
 import { announcementInputSchema, buildAnnouncementMessage } from "../../modules/announcements/announcementService.js";
@@ -76,6 +79,11 @@ const config: SlashCommand = {
     const sub = interaction.options.getSubcommand();
     const guildId = interaction.guildId;
     const current = await ctx.config.get(guildId);
+    const isOwner = memberLevel(interaction.member, current) >= PermissionLevel.OWNER;
+    const assertOwnerOnly = (next: unknown) => {
+      const sensitive = changedOwnerOnlyPaths(current, next);
+      if (sensitive.length && !isOwner) throw new UserError(`Seul le propriétaire du serveur peut modifier : ${sensitive.join(", ")}.`, "Permission insuffisante");
+    };
 
     if (sub === "view") {
       const section = interaction.options.getString("section") as keyof GuildConfig | null;
@@ -101,6 +109,7 @@ const config: SlashCommand = {
       const coerced = coerceConfigValue(leaf, interaction.options.getString("valeur", true));
       if (!coerced.ok) throw new UserError(coerced.error, "Valeur invalide");
       const before = getByPath(current, key);
+      assertOwnerOnly(deepMerge(current, buildPatch(key, coerced.value)));
       const result = await ctx.config.update(guildId, buildPatch(key, coerced.value), interaction.user.id);
       if (!result.ok) throw new UserError(result.errors.join("\n"), "Configuration refusée");
       await ctx.audit.record({ guildId, actorId: interaction.user.id, actorType: "USER", action: "config.update", targetId: key, targetType: "config", details: { before, after: coerced.value } });
@@ -115,6 +124,7 @@ const config: SlashCommand = {
         description: `La section **${section}** sera remise à ses valeurs par défaut.`,
         onConfirm: async (button) => {
           const fresh = { ...(await ctx.config.get(guildId)), [section]: defaultGuildConfig()[section] } as GuildConfig;
+          assertOwnerOnly(fresh);
           const parsed = validatedGuildConfigSchema.safeParse(fresh);
           if (!parsed.success) throw new UserError(parsed.error.issues.map((i) => i.message).join("\n"));
           await ctx.config.replace(guildId, parsed.data, interaction.user.id);
@@ -148,6 +158,7 @@ const config: SlashCommand = {
     if (!parsed.success) {
       throw new UserError(parsed.error.issues.slice(0, 10).map((i) => `• ${i.path.join(".")} : ${i.message}`).join("\n"), "Configuration invalide");
     }
+    assertOwnerOnly(parsed.data);
     await ctx.confirmations.prompt(interaction, {
       title: "Import de configuration",
       description: "La configuration actuelle sera **entièrement remplacée** par le fichier importé (validé).",
