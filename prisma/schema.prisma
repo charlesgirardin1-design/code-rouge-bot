@@ -1,0 +1,399 @@
+// Schéma de la base de données Code Rouge.
+// Toutes les données métier sont rattachées à un serveur Discord (guildId).
+// Un utilisateur (User) est global et peut apparaître dans plusieurs serveurs.
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  moduleFormat           = "esm"
+  importFileExtension    = "js"
+  generatedFileExtension = "ts"
+  runtime                = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Serveurs ───────────────────────────────────────────────
+
+model Guild {
+  id            String    @id // ID Discord du serveur
+  name          String
+  ownerId       String
+  iconHash      String?
+  joinedAt      DateTime  @default(now())
+  leftAt        DateTime?
+  caseCounter   Int       @default(0)
+  ticketCounter Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  settings          GuildSettings?
+  lockdown          LockdownState?
+  statistics        GuildStatistics?
+  members           MemberProfile[]
+  warnings          Warning[]
+  moderationActions ModerationAction[]
+  securityEvents    SecurityEvent[]
+  tickets           Ticket[]
+  announcements     Announcement[]
+  auditLogs         AuditLog[]
+  whitelist         Whitelist[]
+  blacklist         Blacklist[]
+}
+
+model GuildSettings {
+  guildId       String        @id
+  guild         Guild         @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  /// Configuration JSON validée par Zod (voir src/config/guildConfig.ts)
+  config        Json
+  securityScore Float         @default(0)
+  securityLevel SecurityLevel @default(NORMAL)
+  updatedBy     String?
+  updatedAt     DateTime      @updatedAt
+}
+
+model GuildStatistics {
+  guildId         String   @id
+  guild           Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  messagesDeleted Int      @default(0)
+  spamDetected    Int      @default(0)
+  raidsDetected   Int      @default(0)
+  linksBlocked    Int      @default(0)
+  nukeDetected    Int      @default(0)
+  membersVerified Int      @default(0)
+  updatedAt       DateTime @updatedAt
+}
+
+model LockdownState {
+  guildId   String    @id
+  guild     Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  active    Boolean   @default(false)
+  automatic Boolean   @default(false)
+  reason    String?
+  startedBy String?
+  startedAt DateTime?
+  endedAt   DateTime?
+  endedBy   String?
+  /// État précédent sauvegardé pour restauration (niveau de vérification, overwrites, rôles…)
+  snapshot  Json?
+  updatedAt DateTime  @updatedAt
+}
+
+// ─── Utilisateurs ───────────────────────────────────────────
+
+model User {
+  id               String    @id // ID Discord
+  username         String
+  globalName       String?
+  avatarHash       String?
+  bot              Boolean   @default(false)
+  accountCreatedAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  memberships MemberProfile[]
+  warnings    Warning[]       @relation("WarnedUser")
+}
+
+/// Profil d'un utilisateur dans un serveur donné.
+model MemberProfile {
+  guildId     String
+  userId      String
+  guild       Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt    DateTime?
+  leftAt      DateTime?
+  verifiedAt  DateTime?
+  riskScore   Int       @default(0)
+  riskLevel   RiskLevel @default(LOW)
+  riskReasons Json?
+  updatedAt   DateTime  @updatedAt
+
+  @@id([guildId, userId])
+  @@index([guildId, riskLevel])
+}
+
+// ─── Modération ─────────────────────────────────────────────
+
+model Warning {
+  id          Int       @id @default(autoincrement())
+  guildId     String
+  guild       Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation("WarnedUser", fields: [userId], references: [id], onDelete: Cascade)
+  moderatorId String
+  reason      String
+  active      Boolean   @default(true)
+  clearedAt   DateTime?
+  clearedBy   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([guildId, userId, active])
+}
+
+model ModerationAction {
+  id           Int                  @id @default(autoincrement())
+  guildId      String
+  guild        Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  caseNumber   Int
+  type         ModerationActionType
+  targetId     String
+  targetTag    String?
+  moderatorId  String
+  moderatorTag String?
+  reason       String?
+  durationMs   Int?
+  expiresAt    DateTime?
+  /// Pour les bans temporaires : vrai une fois la sanction levée automatiquement
+  expired      Boolean              @default(false)
+  automatic    Boolean              @default(false)
+  success      Boolean              @default(true)
+  error        String?
+  metadata     Json?
+  createdAt    DateTime             @default(now())
+
+  @@unique([guildId, caseNumber])
+  @@index([guildId, targetId])
+  @@index([guildId, createdAt])
+  @@index([type, expired, expiresAt])
+}
+
+// ─── Sécurité ───────────────────────────────────────────────
+
+model SecurityEvent {
+  id          Int               @id @default(autoincrement())
+  guildId     String
+  guild       Guild             @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  type        SecurityEventType
+  severity    Severity
+  userId      String?
+  executorId  String?
+  scoreDelta  Float             @default(0)
+  level       SecurityLevel
+  actionTaken String?
+  simulated   Boolean           @default(false)
+  details     Json?
+  createdAt   DateTime          @default(now())
+
+  @@index([guildId, createdAt])
+  @@index([guildId, type])
+}
+
+model Whitelist {
+  id        Int      @id @default(autoincrement())
+  guildId   String
+  guild     Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  type      ListType
+  value     String
+  addedBy   String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([guildId, type, value])
+}
+
+model Blacklist {
+  id        Int      @id @default(autoincrement())
+  guildId   String
+  guild     Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  type      ListType
+  value     String
+  addedBy   String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([guildId, type, value])
+}
+
+// ─── Tickets ────────────────────────────────────────────────
+
+model Ticket {
+  id           Int            @id @default(autoincrement())
+  guildId      String
+  guild        Guild          @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  number       Int
+  channelId    String?        @unique
+  creatorId    String
+  category     TicketCategory
+  subject      String?
+  status       TicketStatus   @default(OPEN)
+  claimedById  String?
+  participants String[]       @default([])
+  handledBy    String[]       @default([])
+  closedById   String?
+  closeReason  String?
+  transcript   String?
+  createdAt    DateTime       @default(now())
+  closedAt     DateTime?
+  deletedAt    DateTime?
+
+  messages TicketMessage[]
+
+  @@unique([guildId, number])
+  @@index([guildId, status])
+  @@index([guildId, creatorId, status])
+}
+
+model TicketMessage {
+  id          Int      @id @default(autoincrement())
+  ticketId    Int
+  ticket      Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  messageId   String
+  authorId    String
+  authorTag   String
+  authorBot   Boolean  @default(false)
+  content     String
+  attachments Json?
+  embeds      Int      @default(0)
+  createdAt   DateTime
+
+  @@unique([ticketId, messageId])
+  @@index([ticketId, createdAt])
+}
+
+// ─── Annonces ───────────────────────────────────────────────
+
+model Announcement {
+  id          Int                @id @default(autoincrement())
+  guildId     String
+  guild       Guild              @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  channelId   String
+  authorId    String
+  /// Contenu de l'embed (titre, description, couleur, images, footer…)
+  embed       Json
+  mention     String?
+  buttonLabel String?
+  buttonUrl   String?
+  status      AnnouncementStatus @default(DRAFT)
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  messageId   String?
+  error       String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([status, scheduledAt])
+  @@index([guildId, createdAt])
+}
+
+// ─── Audit ──────────────────────────────────────────────────
+
+model AuditLog {
+  id         Int       @id @default(autoincrement())
+  guildId    String
+  guild      Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  actorId    String
+  actorType  ActorType
+  action     String
+  targetId   String?
+  targetType String?
+  reason     String?
+  success    Boolean   @default(true)
+  details    Json?
+  createdAt  DateTime  @default(now())
+
+  @@index([guildId, createdAt])
+  @@index([guildId, action])
+}
+
+// ─── Dashboard ──────────────────────────────────────────────
+
+model DashboardSession {
+  /// Empreinte SHA-256 du jeton de session (le jeton brut n'est jamais stocké)
+  id        String   @id
+  userId    String
+  username  String
+  avatar    String?
+  /// Serveurs dont l'utilisateur est membre (récupérés via OAuth2 à la connexion)
+  guildIds  String[]
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ─── Enums ──────────────────────────────────────────────────
+
+enum SecurityLevel {
+  NORMAL
+  SURVEILLANCE
+  REINFORCED
+  LOCKDOWN
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ModerationActionType {
+  BAN
+  UNBAN
+  KICK
+  TIMEOUT
+  UNTIMEOUT
+  WARN
+  CLEAR_WARNINGS
+  CLEAR_MESSAGES
+  SLOWMODE
+}
+
+enum SecurityEventType {
+  RAID
+  SPAM
+  NUKE
+  PHISHING
+  ALT
+  BOT_ADDED
+  LOCKDOWN
+  UNLOCK
+  LEVEL_CHANGE
+}
+
+enum ListType {
+  DOMAIN
+  INVITE
+}
+
+enum TicketCategory {
+  SUPPORT
+  REPORT
+  PARTNERSHIP
+  QUESTION
+  PURCHASE
+  OTHER
+}
+
+enum TicketStatus {
+  OPEN
+  CLAIMED
+  CLOSED
+  DELETED
+}
+
+enum AnnouncementStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum ActorType {
+  USER
+  BOT
+  DASHBOARD
+  SYSTEM
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+src/generated/
+dashboard/frontend/dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+.idea/
+.vscode/
+transcripts/
