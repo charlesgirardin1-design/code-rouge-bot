@@ -1,0 +1,11 @@
+node_modules
+dashboard/frontend/node_modules
+dist
+dashboard/frontend/dist
+src/generated
+.env
+.env.*
+!.env.example
+.git
+coverage
+*.log
